@@ -54,6 +54,9 @@ def generate_launch_description():
     world_file = PathJoinSubstitution([
         FindPackageShare('tictactoe_robot'), 'worlds', 'tictactoe.sdf',
     ])
+    controllers_file = PathJoinSubstitution([
+        FindPackageShare('tictactoe_robot'), 'config', 'tictactoe_controllers.yaml',
+    ])
 
     ur_sim_control = IncludeLaunchDescription(
         PythonLaunchDescriptionSource([
@@ -64,6 +67,7 @@ def generate_launch_description():
             'ur_type': ur_type,
             'description_file': description_file,
             'world_file': world_file,
+            'controllers_file': controllers_file,
             'initial_joint_controller': 'scaled_joint_trajectory_controller',
             'launch_rviz': 'false',
             'gazebo_gui': gazebo_gui,

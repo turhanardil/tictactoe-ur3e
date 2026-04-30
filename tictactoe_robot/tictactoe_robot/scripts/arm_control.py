@@ -5,11 +5,25 @@ P4 scope: hardcoded pick of blue_token_0 from the tray and place at board
 cell 4 (board center). No game logic integration. Subscribers and full
 parameterization come in P5.
 
-Architecture:
-  Joint-space transit       OMPL RRTConnect via /move_action.
-  Cartesian descent/ascent  Pilz LIN via /move_action, with a pose-goal
-                            OMPL fallback if Pilz refuses (DetachableJoint
-                            forgives imprecise descents).
+Motion split:
+  Joint-space transit       Long-distance reaches (home -> above tray,
+                            above tray -> above board, above board ->
+                            home). Uses OMPL RRTConnect via /move_action.
+                            Pose targets at workspace height (z=0.30) get
+                            planned via OMPL with the cartesian=False path
+                            in go_pose. This is intentional. Pilz LIN
+                            cannot solve straight-line plans across long
+                            distances or through orientation changes,
+                            and slam at the end of a long transit does
+                            not matter because the arm has not approached
+                            an object yet.
+  Cartesian descent/ascent  Short straight-line moves (~17 cm) directly
+                            above and below an object. Pilz LIN via
+                            /move_action. If Pilz refuses (rare), we
+                            fall back to a pose-target OMPL plan. The
+                            DetachableJoint grasping mechanism forgives
+                            imprecise descents, so this fallback does
+                            not visibly degrade behavior.
   Token attach / detach     std_msgs/Empty publishes on the bridged
                             /attach_token_<n> and /detach_token_<n>
                             topics, one DJ instance per token.
@@ -24,6 +38,7 @@ Verbose state logging on every transition makes failures easy to localize.
 """
 
 import math
+import subprocess
 import time
 
 import rclpy
@@ -101,28 +116,47 @@ class ArmControl(Node):
         self._detach_pubs[idx].publish(Empty())
         time.sleep(0.5)
 
-    def _send_goal(self, request, timeout=30.0):
+    def _send_goal_once(self, request, timeout=30.0):
         goal = MoveGroup.Goal()
         goal.request = request
         goal.planning_options = PlanningOptions()
         goal.planning_options.plan_only = False
         if not self._move_action.wait_for_server(timeout_sec=10.0):
             self.get_logger().error('move_action server unavailable')
-            return False
+            return None
         send_future = self._move_action.send_goal_async(goal)
         rclpy.spin_until_future_complete(self, send_future, timeout_sec=10.0)
         gh = send_future.result()
         if gh is None or not gh.accepted:
             self.get_logger().error('plan goal rejected')
-            return False
+            return None
         result_future = gh.get_result_async()
         rclpy.spin_until_future_complete(self, result_future, timeout_sec=timeout)
         if result_future.result() is None:
             self.get_logger().error('plan/execute timed out')
+            return None
+        return result_future.result().result.error_code.val
+
+    def _send_goal(self, request, timeout=30.0):
+        # Retry once on CONTROL_FAILED (-4). With Gazebo GUI rendering on,
+        # the JTC can fall slightly behind the planned trajectory and abort
+        # with PATH_TOLERANCE_VIOLATED. A short settle before retry usually
+        # clears it.
+        err = self._send_goal_once(request, timeout=timeout)
+        if err is None:
             return False
-        err = result_future.result().result.error_code.val
         self.get_logger().info('  -> error_code=%d' % err)
-        return err == 1
+        if err == 1:
+            return True
+        if err == -4:
+            self.get_logger().warn('  CONTROL_FAILED, settling 1.5s and retrying once')
+            time.sleep(1.5)
+            err2 = self._send_goal_once(request, timeout=timeout)
+            if err2 is None:
+                return False
+            self.get_logger().info('  retry -> error_code=%d' % err2)
+            return err2 == 1
+        return False
 
     def _build_joint_request(self, joints, planner='ompl'):
         req = MotionPlanRequest()
@@ -160,8 +194,11 @@ class ArmControl(Node):
             req.planner_id = 'RRTConnect'
         req.num_planning_attempts = 5
         req.allowed_planning_time = 5.0
-        req.max_velocity_scaling_factor = 0.2
-        req.max_acceleration_scaling_factor = 0.2
+        # Velocity is conservative (0.1) so the controller can keep up with
+        # the trajectory under GUI rendering load. Path tolerance violations
+        # at shoulder_lift were observed at 0.2 scaling.
+        req.max_velocity_scaling_factor = 0.1
+        req.max_acceleration_scaling_factor = 0.1
         c = Constraints()
         # Position constraint, 1cm tolerance box around the target.
         pc = PositionConstraint()
@@ -202,32 +239,75 @@ class ArmControl(Node):
         self.get_logger().info('joint goto: %s' % label)
         return self._send_goal(self._build_joint_request(joints, 'ompl'))
 
-    def go_pose(self, x, y, z, label):
-        self.get_logger().info('pose goto: %s -> (%.3f, %.3f, %.3f)' % (label, x, y, z))
-        ok = self._send_goal(self._build_pose_request(x, y, z, 'pilz_lin'))
-        if ok:
-            return True
-        self.get_logger().warn('  Pilz LIN failed, falling back to OMPL pose')
+    def _settle(self, secs=0.5):
+        """Wait for the arm to come to rest before the next plan."""
+        end = time.time() + secs
+        while time.time() < end:
+            rclpy.spin_once(self, timeout_sec=0.05)
+
+    def go_pose(self, x, y, z, label, cartesian=True):
+        """Plan and execute to a TCP pose target.
+
+        cartesian=True for short descents and ascents above an object,
+        where a straight-line path matters. Plans with Pilz LIN, falls
+        back to OMPL pose if Pilz refuses.
+
+        cartesian=False for long transit moves at workspace height,
+        where any joint-space path is fine. Plans directly with OMPL.
+        """
+        self.get_logger().info('pose goto: %s -> (%.3f, %.3f, %.3f) %s'
+                               % (label, x, y, z,
+                                  'cartesian' if cartesian else 'transit'))
+        if cartesian:
+            ok = self._send_goal(self._build_pose_request(x, y, z, 'pilz_lin'))
+            if ok:
+                return True
+            self.get_logger().warn('  Pilz LIN failed, falling back to OMPL pose')
         return self._send_goal(self._build_pose_request(x, y, z, 'ompl'))
 
-    def run_p4(self):
+    def screenshot(self, path):
+        """Trigger an X11 screenshot of the Gazebo GUI."""
+        try:
+            subprocess.run(
+                ['import', '-window', 'root', path],
+                check=True, timeout=5.0)
+            self.get_logger().info('screenshot saved: %s' % path)
+        except (subprocess.SubprocessError, FileNotFoundError) as e:
+            self.get_logger().warn('screenshot failed for %s: %s' % (path, e))
+
+    def run_p4(self, take_screenshots=False):
         self.detach_all()
         time.sleep(1.0)
 
         if not self.go_joint([0.0, -1.5707, 0.0, -1.5707, 0.0, 0.0], 'up'):
             self.get_logger().error('failed to reach up'); return
+        self._settle()
 
         tx, ty = TRAY_TOKEN_0
-        if not self.go_pose(tx, ty, APPROACH_Z, 'above tray slot 0'): return
+        if not self.go_pose(tx, ty, APPROACH_Z, 'above tray slot 0',
+                            cartesian=False): return
+        self._settle()
+        if take_screenshots:
+            self.screenshot('/tmp/p4_visual_1.png')
         if not self.go_pose(tx, ty, GRASP_Z, 'descend to grasp 0'): return
+        self._settle()
         self.attach_token(0)
         if not self.go_pose(tx, ty, APPROACH_Z, 'ascend from tray 0'): return
+        self._settle()
 
         bx, by = BOARD_CELL_4
-        if not self.go_pose(bx, by, APPROACH_Z, 'above board cell 4'): return
+        if not self.go_pose(bx, by, APPROACH_Z, 'above board cell 4',
+                            cartesian=False): return
+        self._settle()
+        if take_screenshots:
+            self.screenshot('/tmp/p4_visual_2.png')
         if not self.go_pose(bx, by, PLACE_Z, 'descend to place 0'): return
+        self._settle()
         self.detach_token(0)
         if not self.go_pose(bx, by, APPROACH_Z, 'ascend from board 4'): return
+        self._settle()
+        if take_screenshots:
+            self.screenshot('/tmp/p4_visual_3.png')
 
         if not self.go_joint([0.0, -1.5707, 0.0, -1.5707, 0.0, 0.0], 'home (up)'):
             return
@@ -237,13 +317,15 @@ class ArmControl(Node):
 
 
 def main():
+    import os
     rclpy.init()
     node = ArmControl()
     node.get_logger().info('waiting 8s for move_group + controllers to settle')
     end = time.time() + 8.0
     while time.time() < end:
         rclpy.spin_once(node, timeout_sec=0.1)
-    node.run_p4()
+    take_screenshots = os.environ.get('TICTACTOE_SCREENSHOTS', '0') == '1'
+    node.run_p4(take_screenshots=take_screenshots)
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:
