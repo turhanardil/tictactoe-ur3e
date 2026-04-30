@@ -15,6 +15,7 @@ setup(
         (os.path.join('share', package_name), ['package.xml']),
         (os.path.join('share', package_name, 'launch'), glob('launch/*.launch.py')),
         (os.path.join('share', package_name, 'worlds'), glob('worlds/*.sdf')),
+        (os.path.join('share', package_name, 'urdf'), glob('urdf/*.xacro')),
         (os.path.join('share', package_name, 'config'), glob('config/*')),
     ],
     install_requires=['setuptools'],
@@ -28,6 +29,7 @@ setup(
         'console_scripts': [
             'mock_vision = tictactoe_robot.scripts.mock_vision:main',
             'game_ai = tictactoe_robot.scripts.game_ai:main',
+            'arm_control = tictactoe_robot.scripts.arm_control:main',
         ],
     },
 )

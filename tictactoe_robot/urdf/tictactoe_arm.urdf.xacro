@@ -1,0 +1,86 @@
+<?xml version="1.0"?>
+<!--
+  UR3e xacro extended with five DetachableJoint plugins, one per blue token.
+  Adapted from Universal_Robots_ROS2_GZ_Simulation/ur_simulation_gz/urdf/ur_gz.urdf.xacro
+  on the ros2 branch. The body of the file is identical apart from the
+  trailing <gazebo> blocks that add the DetachableJoint instances. Each
+  instance gets a unique attach and detach topic so they can be addressed
+  individually from arm_control.py.
+
+  Parent link wrist_3_link is the last UR link with mass. tool0 is a frame
+  with no mass and is not valid as a DJ parent.
+-->
+<robot xmlns:xacro="http://wiki.ros.org/xacro" name="$(arg name)">
+  <xacro:arg name="name" default="ur"/>
+
+  <xacro:include filename="$(find ur_description)/urdf/ur_macro.xacro"/>
+  <xacro:include filename="$(find ur_simulation_gz)/urdf/ur_gz.ros2_control.xacro"/>
+
+  <xacro:arg name="ur_type" default="ur3e"/>
+
+  <xacro:arg name="tf_prefix" default="" />
+  <xacro:arg name="joint_limit_params" default="$(find ur_description)/config/$(arg ur_type)/joint_limits.yaml"/>
+  <xacro:arg name="kinematics_params" default="$(find ur_description)/config/$(arg ur_type)/default_kinematics.yaml"/>
+  <xacro:arg name="physical_params" default="$(find ur_description)/config/$(arg ur_type)/physical_parameters.yaml"/>
+  <xacro:arg name="visual_params" default="$(find ur_description)/config/$(arg ur_type)/visual_parameters.yaml"/>
+  <xacro:arg name="transmission_hw_interface" default=""/>
+  <xacro:arg name="safety_limits" default="false"/>
+  <xacro:arg name="safety_pos_margin" default="0.15"/>
+  <xacro:arg name="safety_k_position" default="20"/>
+
+  <xacro:arg name="simulation_controllers" default="" />
+  <xacro:arg name="ros_namespace" default="" />
+
+  <link name="world" />
+
+  <xacro:ur_robot
+    name="$(arg name)"
+    tf_prefix="$(arg tf_prefix)"
+    parent="world"
+    joint_limits_parameters_file="$(arg joint_limit_params)"
+    kinematics_parameters_file="$(arg kinematics_params)"
+    physical_parameters_file="$(arg physical_params)"
+    visual_parameters_file="$(arg visual_params)"
+    safety_limits="$(arg safety_limits)"
+    safety_pos_margin="$(arg safety_pos_margin)"
+    safety_k_position="$(arg safety_k_position)"
+    force_abs_paths="true"
+    >
+    <origin xyz="0 0 0.10" rpy="0 0 0" />
+  </xacro:ur_robot>
+
+  <gazebo>
+    <plugin filename="gz_ros2_control-system" name="gz_ros2_control::GazeboSimROS2ControlPlugin">
+      <parameters>$(arg simulation_controllers)</parameters>
+      <ros>
+        <namespace>$(arg ros_namespace)</namespace>
+      </ros>
+    </plugin>
+  </gazebo>
+
+  <xacro:ur_ros2_control
+    name="$(arg name)"
+    tf_prefix="$(arg tf_prefix)"
+    transmission_hw_interface="$(arg transmission_hw_interface)"
+  />
+
+  <xacro:macro name="token_dj" params="idx">
+    <gazebo>
+      <plugin filename="gz-sim-detachable-joint-system" name="gz::sim::systems::DetachableJoint">
+        <parent_link>$(arg tf_prefix)wrist_3_link</parent_link>
+        <child_model>blue_token_${idx}</child_model>
+        <child_link>token_link</child_link>
+        <attach_topic>/attach_token_${idx}</attach_topic>
+        <detach_topic>/detach_token_${idx}</detach_topic>
+        <suppress_child_warning>true</suppress_child_warning>
+      </plugin>
+    </gazebo>
+  </xacro:macro>
+
+  <xacro:token_dj idx="0"/>
+  <xacro:token_dj idx="1"/>
+  <xacro:token_dj idx="2"/>
+  <xacro:token_dj idx="3"/>
+  <xacro:token_dj idx="4"/>
+
+</robot>
