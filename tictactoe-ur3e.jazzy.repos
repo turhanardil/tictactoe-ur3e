@@ -1,0 +1,51 @@
+# Source dependencies for tictactoe-ur3e on ROS 2 Jazzy + Gazebo Harmonic.
+#
+# For a fully fresh ROS 2 Jazzy install, clone all entries below with:
+#   vcs import src < src/tictactoe-ur3e/tictactoe-ur3e.jazzy.repos
+#
+# On the Duke ECE 383L lab Docker container (ros2_lab) the moveit2 / ros2_control /
+# ros2_controllers / gz_ros2_control / moveit_msgs / srdfdom packages are already
+# installed via apt as ros-jazzy-* debs, so only the Universal_Robots_* entries
+# below are strictly required. The other entries are kept here for fresh setups.
+
+repositories:
+  Universal_Robots_ROS2_Description:
+    type: git
+    url: https://github.com/UniversalRobots/Universal_Robots_ROS2_Description.git
+    version: jazzy
+  Universal_Robots_ROS2_Driver:
+    type: git
+    url: https://github.com/UniversalRobots/Universal_Robots_ROS2_Driver.git
+    version: jazzy
+  Universal_Robots_ROS2_GZ_Simulation:
+    type: git
+    url: https://github.com/UniversalRobots/Universal_Robots_ROS2_GZ_Simulation.git
+    version: ros2
+  ur_msgs:
+    type: git
+    url: https://github.com/ros-industrial/ur_msgs.git
+    version: humble-devel
+  gz_ros2_control:
+    type: git
+    url: https://github.com/ros-controls/gz_ros2_control.git
+    version: jazzy
+  moveit2:
+    type: git
+    url: https://github.com/ros-planning/moveit2.git
+    version: main
+  moveit_msgs:
+    type: git
+    url: https://github.com/ros-planning/moveit_msgs.git
+    version: ros2
+  srdfdom:
+    type: git
+    url: https://github.com/moveit/srdfdom.git
+    version: ros2
+  ros2_control:
+    type: git
+    url: https://github.com/ros-controls/ros2_control.git
+    version: jazzy
+  ros2_controllers:
+    type: git
+    url: https://github.com/ros-controls/ros2_controllers.git
+    version: jazzy
